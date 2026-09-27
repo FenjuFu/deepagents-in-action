@@ -43,7 +43,7 @@ result = task(name="researcher", task="深入调研 LangGraph 生态")
 | **并发性** | 可并行触发，但主 Agent 仍被整批阻塞 | 完全并行，主 Agent 全程不阻塞 |
 | **中途追加指令** | ❌ 不支持 | ✅ `update_async_task` 注入新指令 |
 | **取消** | ❌ 不支持 | ✅ `cancel_async_task` 请求取消任务 |
-| **状态性** | 无状态——每次调用相互独立 | 有状态——子 Agent 拥有自己的线程，会话历史持续累积 |
+| **状态性** | 无状态——每次调用相互独立 | 有状态——子 Agent 拥有自己的会话（thread），会话历史持续累积 |
 | **典型场景** | 一问一答、毫秒级到秒级的快速委派 | 几分钟以上的研究、编码、迁移等长程任务，需要在对话中互动管理 |
 
 ![同步 vs 异步子 Agent：左侧主 Agent 委派后被阻塞、用户只能等待；右侧主 Agent 拿到任务 ID 立即返回，用户可继续对话、查看进度、追加指令或取消任务](../public/imgs/15-comparison-sync-vs-async.png)
@@ -52,7 +52,26 @@ result = task(name="researcher", task="深入调研 LangGraph 生态")
 
 ## 配置异步子 Agent
 
-异步子 Agent 用 `AsyncSubAgent` 类来声明，每一个都指向一台 [Agent Protocol](https://github.com/langchain-ai/agent-protocol) 服务（最常见的就是 LangSmith Deployments，也可以是你自托管的兼容服务）：
+### 先分清协议、运行服务与追踪
+
+异步子 Agent 需要由服务端承接后台任务。这里涉及几个不同层次的概念：
+
+| 名称 | 本章中的职责 |
+|---|---|
+| [Agent Protocol](https://github.com/langchain-ai/agent-protocol) | 一套调用 Agent 的 API 规范，约定如何创建会话、启动运行、查询状态和取消任务等 |
+| [Agent Server](https://docs.langchain.com/langsmith/agent-server) | 实现这些接口的运行服务，加载 Agent 代码，调度执行并管理会话状态与结果 |
+| LangSmith Deployment | 部署和运行 Agent Server 的平台能力；也可以使用自托管的兼容服务 |
+| [LangSmith Observability](https://docs.langchain.com/langsmith/observability) | 采集和查看 trace，帮助分析模型调用、工具执行、耗时与错误 |
+
+主 Agent 负责决定任务怎么拆、交给谁、如何整合结果；Agent Server 负责承接和执行任务。开启 LangSmith 追踪会记录执行过程，但不会自动把本地 Agent 变成可接收任务的服务。本章使用 `langgraph dev` 启动本地 Agent Server，无需先部署到 LangSmith 云端。
+
+服务端的 **thread 表示保存消息和状态的会话，不是操作系统线程**；**run 表示该会话上的一次执行**。主 Agent 调用 `start_async_task` 后，中间件通过 SDK 创建子任务的 thread 和 run，返回任务 ID，服务端继续执行子 Agent。后续查询、追加指令和取消也通过服务接口完成。
+
+### 声明要调用的子 Agent
+
+`AsyncSubAgent` 是一份配置，指定要调用哪个服务中的哪个 Agent：`graph_id` 标识服务端已注册的 graph 或 assistant，`url` 指定服务地址。**多个子 Agent 可以共用同一个 Agent Server**；与主 Agent 同部署时可省略 `url`，使用进程内 ASGI 传输。具体传输与部署方式见后文，也可参考[官方异步子 Agent 文档](https://docs.langchain.com/oss/python/deepagents/async-subagents)。
+
+下面是声明配置的**示意片段**，省略了服务端 `researcher`、`coder` 的实现、注册和启动过程。`AsyncSubAgent(...)` 本身不会创建这些 Agent 的实现或启动服务器：
 
 ```python
 from deepagents import AsyncSubAgent, create_deep_agent
@@ -102,7 +121,7 @@ agent = create_deep_agent(
 | `cancel_async_task` | 终止运行中的任务 | 确认信息 |
 | `list_async_tasks` | 列出所有任务（含实时状态） | 任务总览 |
 
-主 Agent 像调用普通工具一样调用它们，中间件负责处理远程线程的创建、运行管理与状态持久化。
+主 Agent 像调用普通工具一样调用它们，中间件通过 SDK 请求服务端创建会话、管理运行，并在主 Agent 的状态中记录任务元数据；子 Agent 的会话状态与执行结果由服务端管理。
 
 ### 一次完整生命周期
 
@@ -160,15 +179,30 @@ agent = create_deep_agent(
 
 ## 两种传输：ASGI vs HTTP
 
+[ASGI](https://asgi.readthedocs.io/en/latest/introduction.html)（异步服务器网关接口）规定了 **Python Web 服务器怎样把请求交给应用、应用怎样交回响应**。例如，Uvicorn 接收 HTTP 网络请求后，就可以按 ASGI 约定调用应用。因此，一次请求可以同时涉及 HTTP 和 ASGI。
+
+本节的 **“ASGI 传输”** 指的是另一条调用路径：SDK 使用进程内适配器，直接按 ASGI 约定调用应用，省去网络收发。请求仍有方法、路径和正文，应用仍会处理对应的 HTTP API；“不走网络”指的是请求的传递方式。
+
+```text
+HTTP 传输：SDK → 网络连接 → Uvicorn → Agent Server 应用
+ASGI 传输：SDK → 进程内 ASGI 适配器 → Agent Server 应用
+```
+
 ### ASGI 传输（同部署，推荐起手式）
 
-`AsyncSubAgent` 不传 `url` 时，LangGraph SDK 会走 **ASGI 传输**——SDK 调用直接进程内函数路由，不走网络。LangGraph 部署需要把所有 graph 注册到同一个 `langgraph.json`。
+先把主 Agent 和子 Agent 注册到同一份 `langgraph.json` 中，再用 `langgraph dev` 启动服务。这样，两者就由同一个 Agent Server 承载。
+
+在这种部署方式下，`AsyncSubAgent` 可以省略 `url`，只用 `graph_id` 指定要调用的子 Agent。LangGraph SDK 会使用 ASGI 传输调用服务接口，创建会话、调度后台任务和保存状态仍由 Server 负责。
+
+这里的“不走网络”仅指 SDK 到 Server 的这段调用；模型 API 等外部请求仍可能使用网络。后面的本地示例会启动 Server，并从客户端通过 HTTP 调用主 Agent，再由主 Agent 通过 ASGI 委派子任务。
+
+> **调用方式提醒**：ASGI 传输需要主 Agent 通过 `ainvoke()` 等异步入口执行，不支持同步的 `invoke()`。
 
 ASGI 优势：
 
 - **零网络延迟**：调用即函数调用
 - **零额外鉴权配置**：本地进程互信
-- **子 Agent 仍跑在独立 thread 上**，状态隔离不打折
+- **子 Agent 仍有独立的会话（thread）**，各自保存消息和状态
 
 绝大多数项目从这里起步就够了。
 
@@ -348,20 +382,7 @@ model = ChatOpenAI(
 
 然后把上面 `create_deep_agent()` 里的 `model=os.environ.get("MODEL_NAME", "openai:gpt-4.1-mini")` 替换成 `model=model` 即可。
 
-如果你想直接以 `python graphs/supervisor.py` 运行（例如做快速本地调试），需要手动为 `create_deep_agent()` 传入 `checkpointer=InMemorySaver()`，否则多轮对话的状态无法持久化。
-
-注意该参数**不能**在 `langgraph dev` 下使用，平台已内置持久化，传入会直接报 `ValueError`。
-
-```python
-from langgraph.checkpoint.memory import InMemorySaver
-
-graph = create_deep_agent(
-    model=...,
-    system_prompt=...,
-    subagents=[...],
-    checkpointer=InMemorySaver(),
-)
-```
+本例的 `graphs/supervisor.py` 用于导出 graph，供 Agent Server 加载。直接运行 `python graphs/supervisor.py` 只会创建 graph 对象，不会启动服务或发起对话；添加 `InMemorySaver` 也无法替代省略 `url` 时所需的 ASGI 服务环境。请按下面两步启动 Server，再用 SDK 调用主 Agent。`langgraph dev` 会提供持久化组件，此处不要手动传入 `checkpointer`。
 
 ### 第 6 步：启动本地 Agent Server
 
@@ -370,6 +391,22 @@ Worker 槽位要至少容纳 1 个 Supervisor + 1 个 Researcher 的运行。这
 ```bash
 langgraph dev --n-jobs-per-worker 4
 ```
+
+这里的 `langgraph` 命令由第 1 步安装的 `langgraph-cli` 提供，`dev` 子命令封装了本地开发服务的启动过程：
+
+```text
+langgraph dev
+    ↓
+langgraph-cli 读取当前目录的 langgraph.json
+    ↓
+调用 langgraph_api.cli.run_server(...)
+    ↓
+通过 Uvicorn 启动本地 Agent Server
+    ↓
+加载配置中的 graph，接受客户端请求
+```
+
+因此，只需在 `langgraph.json` 中指定 Agent 的名称和代码位置，CLI 就能启动承载它们的服务，无需自己编写 Web 服务的启动代码。命令与配置选项可查阅 [LangGraph CLI 文档](https://docs.langchain.com/langsmith/cli)。
 
 启动成功后，终端里应该能看到本地地址，例如：
 
@@ -555,7 +592,7 @@ AsyncSubAgent(
 
 ### 3. 用 Thread ID 串联追踪
 
-LangGraph 部署里，每次异步子 Agent 运行都是一次普通的 LangGraph run，在 LangSmith 中完整可见。主 Agent 的 trace 会显示 launch / check / update / cancel / list 这些工具调用；每个子 Agent 的运行是另一条 trace，**通过 thread ID（也就是 task ID）就能把两边对上**。出问题时这条线索极其重要。
+LangGraph 部署里，每次异步子 Agent 运行都是一次普通的 LangGraph run。配置并启用 LangSmith 追踪后，可以在 Observability 中查看这些运行。主 Agent 的 trace 会显示 launch / check / update / cancel / list 这些工具调用；每个子 Agent 的运行是另一条 trace，**通过子任务的 thread ID（也就是 task ID）就能把两边对上**。这里使用的是追踪能力；后台任务仍由 Agent Server 执行。
 
 ## 常见问题排查
 
