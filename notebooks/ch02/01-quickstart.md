@@ -1,4 +1,4 @@
-> 本次执行模式：**offline**。源码指纹：`76aa4c18c2e5`。
+> 本次执行模式：**offline**。源码指纹：`6ea7339361f0`。
 
 # 第 2 章 Notebook（一）：快速上手与自定义工具
 
@@ -45,7 +45,7 @@ show_runtime()
     langchain==1.4.2
     langgraph==1.2.11
     langchain-openai==1.6.2
-
+    
 
 ## 1. Hello World：最简单的 Deep Agent
 
@@ -89,7 +89,7 @@ print("模型接口：", type(weather_model).__name__)
 ```
 
     模型接口： ScriptedChatModel
-
+    
 
 ### 1.1 定义工具，运行 Agent
 
@@ -121,7 +121,7 @@ print(result["messages"][-1].content)
 ```
 
     （脚本预设回复）已查询北京的天气，结果见工具返回。
-
+    
 
 ### 1.2 `invoke()` 返回了什么？
 
@@ -152,23 +152,28 @@ for index, message in enumerate(result["messages"]):
     [2] tool  ToolMessage  It's always sunny in 北京!
           回应调用 ID: ch02-weather 工具: get_weather 状态: success
     [3] ai    AIMessage    （脚本预设回复）已查询北京的天气，结果见工具返回。
-
+    
 
 **怎样读这段输出**：offline 模式下应看到编号 `[0]` 到 `[3]` 的四条消息。`[0]` 是用户问题；`[1]` 的 `ai` 文字为空，真正的内容在它下面“请求工具”那一行；`[2]` 的 `tool` 是 Python 函数实际返回的 `It's always sunny in 北京!`，它回应的调用 ID 与请求一致；`[3]` 的 `ai` 才是上一格打印出来的最终回复。
 
 状态里的 `files` 是 Deep Agent 自带的虚拟文件系统，本次没有写文件，所以是空的。第 3 章会专门讲它。
 
-下一格把这些观察写成自动检查：先找出参数里带 `city` 的 `get_weather` 请求，再找 ID 对应、状态成功、内容与参数一致的工具结果，最后确认对话以一条不再请求工具的模型回复结束。检查只依赖工具名、参数和返回值，不依赖最终回答的措辞；真实模型可能把城市写成 `Beijing`，检查同样适用。
+下一格把这些观察写成自动检查：先找出 `get_weather` 请求，确认查询的正是题目里的城市，再找 ID 对应、状态成功、内容与参数一致的工具结果，最后确认对话以一条不再请求工具的模型回复结束。期望的城市作为参数传给检查函数，默认接受 `北京` 和 `Beijing` 两种写法（不区分大小写）；问北京却查了上海，工具即使正常返回也会被判为不符合要求。检查只依赖工具名、参数和返回值，不依赖最终回答的措辞。
 
 
 ```python
 from langchain_core.messages import AIMessage, ToolMessage
 
 
-def check_weather(messages):
+def check_weather(messages, city=("北京", "Beijing")):
     calls = {call["id"]: call for message in messages if isinstance(message, AIMessage)
              for call in message.tool_calls if call["name"] == "get_weather"}
     assert calls, "模型没有请求 get_weather。"
+    accepted = {name.casefold() for name in city}
+    asked = [str(call["args"].get("city", "")) for call in calls.values()]
+    calls = {call_id: call for call_id, call in calls.items()
+             if str(call["args"].get("city", "")).strip().casefold() in accepted}
+    assert calls, f"get_weather 查询的是 {asked}，不是题目要求的城市（{' / '.join(city)}）。"
     answered = [message for message in messages if isinstance(message, ToolMessage)
                 and message.tool_call_id in calls and message.name == "get_weather"
                 and message.status == "success"
@@ -183,7 +188,7 @@ check_weather(result["messages"])
 ```
 
     已验证 get_weather 的请求、调用关联、成功状态与返回值： It's always sunny in 北京!
-
+    
 
 ## 2. 编写自定义工具：三要素变成了什么？
 
@@ -229,7 +234,7 @@ print("直接调用函数：", calculate("1 + 2 * 3"), convert_currency(100, "US
 ```
 
     直接调用函数： 7 {'amount': 720.0, 'currency': 'CNY'}
-
+    
 
 ### 2.1 打印工具 Schema
 
@@ -267,7 +272,7 @@ print("\n已验证：类型标注、docstring 与默认值都进入了工具 Sch
       - to_currency: string，默认值 'CNY'；The target currency code, defaults to "CNY".
     
     已验证：类型标注、docstring 与默认值都进入了工具 Schema。
-
+    
 
 对照输出看三要素：
 
@@ -330,42 +335,53 @@ for message in calc_result["messages"]:
     请求 calculate {'expression': '720.0 * 1.08'} ID: ch02-calculate
       返回 calculate success 777.6 ID: ch02-calculate
     最终回复： （脚本预设回复）换算与计算已完成，结果见工具返回。
-
+    
 
 **怎样读这段输出**：应看到两对“请求 → 返回”。`convert_currency` 的请求里没有 `to_currency`，函数用了默认值 `CNY`；它返回的字典被框架转成 JSON 文本 `{"amount": 720.0, "currency": "CNY"}` 放进 ToolMessage。`calculate` 返回 `777.6`。
 
 下一格的检查分三步：
 
 1. 找到参数为 100、`USD`、目标币种为 `CNY`（显式传入或使用默认值）且成功返回的换算，用 `json.loads` 把 JSON 文本还原成字典；
-2. 用这个**实际**换算结果乘以 1.08，确认某次成功的 `calculate` 算出了同样的数（`math.isclose` 容忍浮点误差）；
-3. 确认对话以最终回复结束。
+2. 确认两步真的接上了：`calculate` 是在换算结果返回**之后**才请求的，而且算式里用到了这个**实际**换算结果；
+3. 确认这次 `calculate` 成功算出换算结果 × 1.08（`math.isclose` 容忍浮点误差），最后以最终回复结束。
 
-真实模型可能把算式写成 `720 * 1.08`，也可能一次请求两个工具；这些差异都不影响检查，因为它只看参数和结果。
+检查不限定算式的写法：`720 * 1.08`、`1.08 * 720.0` 都可以。但如果模型在同一次请求里同时调用两个工具，或者先直接算出 `777.6` 再去换汇，`calculate` 就没有用到换算结果，检查会指出这一步没有接上。
 
 
 ```python
 import json
 import math
+import re
 
 from langchain_core.messages import AIMessage, ToolMessage
 
 
 def check_calculator(messages, amount=100, source="USD", factor=1.08):
-    calls = {call["id"]: call for message in messages if isinstance(message, AIMessage)
-             for call in message.tool_calls}
-    succeeded = [message for message in messages if isinstance(message, ToolMessage)
-                 and message.status == "success" and message.tool_call_id in calls
-                 and calls[message.tool_call_id]["name"] == message.name]
-    converted = None
-    for message in succeeded:
+    calls, requested_at = {}, {}
+    for index, message in enumerate(messages):
+        if isinstance(message, AIMessage):
+            for call in message.tool_calls:
+                calls[call["id"]], requested_at[call["id"]] = call, index
+    succeeded = [(index, message) for index, message in enumerate(messages)
+                 if isinstance(message, ToolMessage) and message.status == "success"
+                 and message.tool_call_id in calls and calls[message.tool_call_id]["name"] == message.name]
+    converted, converted_at = None, None
+    for index, message in succeeded:
         args = calls[message.tool_call_id]["args"]
         if (message.name == "convert_currency" and args.get("amount") == amount
                 and args.get("from_currency") == source and args.get("to_currency", "CNY") == "CNY"):
-            converted = json.loads(message.content)
+            converted, converted_at = json.loads(message.content), index
     assert converted and converted.get("currency") == "CNY", "没有成功的 100 USD → CNY 换算。"
     expected = converted["amount"] * factor
-    products = [float(message.content) for message in succeeded if message.name == "calculate"]
-    assert any(math.isclose(value, expected) for value in products), \
+
+    later = [message for _, message in succeeded if message.name == "calculate"
+             and requested_at[message.tool_call_id] > converted_at]
+    assert later, "calculate 应在拿到换算结果之后再请求；同一次请求里同时调用两个工具时，算式还用不上换算结果。"
+    chained = [message for message in later if any(
+        math.isclose(float(number), converted["amount"])
+        for number in re.findall(r"\d+(?:\.\d+)?", str(calls[message.tool_call_id]["args"].get("expression", ""))))]
+    assert chained, f"calculate 的算式没有用到换算结果 {converted['amount']}。"
+    assert any(math.isclose(float(message.content), expected) for message in chained), \
         f"calculate 没有算出 {converted['amount']} × {factor} = {expected:g}。"
     assert isinstance(messages[-1], AIMessage) and not messages[-1].tool_calls, "缺少最终回复。"
     print(f"已验证：{amount} {source} → {converted['amount']} CNY，× {factor} = {expected:g}")
@@ -375,7 +391,7 @@ check_calculator(calc_result["messages"])
 ```
 
     已验证：100 USD → 720.0 CNY，× 1.08 = 777.6
-
+    
 
 ## 4. 工具出错时会发生什么？
 
@@ -423,7 +439,7 @@ else:
      Please fix the error and try again.
     
     函数内部异常中断了 invoke()：KeyError 'JPY'
-
+    
 
 两种错误的区别很重要：
 
