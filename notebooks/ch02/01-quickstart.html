@@ -7803,7 +7803,7 @@ a.anchor-link {
 <div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
 </div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
 <blockquote>
-<p>本次执行模式：<strong>offline</strong>。源码指纹：<code>6ea7339361f0</code>。</p>
+<p>本次执行模式：<strong>offline</strong>。源码指纹：<code>9bad9627b4a3</code>。</p>
 </blockquote>
 </div>
 </div>
@@ -8390,7 +8390,13 @@ calculate(expression="720.0 * 1.08")               →  777.6
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>请求 convert_currency {'amount': 100, 'from_currency': 'USD'} ID: ch02-convert
+<pre>请求</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre> convert_currency {'amount': 100, 'from_currency': 'USD'} ID: ch02-convert
   返回 convert_currency success {"amount": 720.0, "currency": "CNY"} ID: ch02-convert
 请求 calculate {'expression': '720.0 * 1.08'} ID: ch02-calculate
   返回 calculate success 777.6 ID: ch02-calculate
@@ -8569,7 +8575,13 @@ calculate(expression="720.0 * 1.08")               →  777.6
 内容： Error invoking tool 'convert_currency' with kwargs {'amount': 'a lot', 'from_currency': 'USD'} with error:
  amount: Input should be a valid number, unable to parse string as a number
  Please fix the error and try again.
-
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>
 函数内部异常中断了 invoke()：KeyError 'JPY'
 </pre>
 </div>
@@ -8606,8 +8618,8 @@ calculate(expression="720.0 * 1.08")               →  777.6
 <li>脚本里第二次调用写死的是 <code>720.0 * 1.08</code>，<code>calculate</code> 会返回多少？</li>
 <li><code>check_calculator</code> 会通过吗？如果失败，停在哪一步？</li>
 </ol>
-<p><strong>再运行</strong>：选择“重启内核并运行全部”，核对第 3 节的输出：换算返回 <code>{"amount": 700.0, "currency": "CNY"}</code>，<code>calculate</code> 仍然返回 <code>777.6</code>；<code>check_calculator</code> 停在“calculate 没有算出 700.0 × 1.08 = 756”。第 1、2 节和第 4 节不受影响。</p>
-<p><strong>这说明</strong>：脚本模型只是回放预先写好的消息，不会读取工具结果，所以第二步用的仍是旧数字。检查用实际换算结果重算，发现两步没有衔接上。每一步都“成功”，也不等于任务完成。live 模式下，这一步由真实模型读取 <code>700.0</code> 再写算式，检查的正是它有没有做到。</p>
+<p><strong>再运行</strong>：选择“重启内核并运行全部”，核对第 3 节的输出：换算返回 <code>{"amount": 700.0, "currency": "CNY"}</code>，<code>calculate</code> 仍然返回 <code>777.6</code>；<code>check_calculator</code> 停在“calculate 的算式没有用到换算结果 700.0。”。第 1、2 节和第 4 节不受影响。</p>
+<p><strong>这说明</strong>：脚本模型只是回放预先写好的消息，不会读取工具结果，所以第二步用的仍是旧数字。检查先看算式里有没有实际换算结果 <code>700.0</code>：<code>720.0 * 1.08</code> 里没有，两步没有衔接上，检查就停在这里，还轮不到核对 <code>700.0 × 1.08 = 756</code>。每一步都“成功”，也不等于任务完成。live 模式下，这一步由真实模型读取 <code>700.0</code> 再写算式，检查的正是它有没有做到。</p>
 <p><strong>恢复</strong>：把汇率改回 <code>7.2</code>，重启内核并运行全部，确认所有检查重新通过。</p>
 </div>
 </div>

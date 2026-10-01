@@ -1,4 +1,4 @@
-> 本次执行模式：**offline**。源码指纹：`6ea7339361f0`。
+> 本次执行模式：**offline**。源码指纹：`9bad9627b4a3`。
 
 # 第 2 章 Notebook（一）：快速上手与自定义工具
 
@@ -45,7 +45,7 @@ show_runtime()
     langchain==1.4.2
     langgraph==1.2.11
     langchain-openai==1.6.2
-    
+
 
 ## 1. Hello World：最简单的 Deep Agent
 
@@ -89,7 +89,7 @@ print("模型接口：", type(weather_model).__name__)
 ```
 
     模型接口： ScriptedChatModel
-    
+
 
 ### 1.1 定义工具，运行 Agent
 
@@ -121,7 +121,7 @@ print(result["messages"][-1].content)
 ```
 
     （脚本预设回复）已查询北京的天气，结果见工具返回。
-    
+
 
 ### 1.2 `invoke()` 返回了什么？
 
@@ -152,7 +152,7 @@ for index, message in enumerate(result["messages"]):
     [2] tool  ToolMessage  It's always sunny in 北京!
           回应调用 ID: ch02-weather 工具: get_weather 状态: success
     [3] ai    AIMessage    （脚本预设回复）已查询北京的天气，结果见工具返回。
-    
+
 
 **怎样读这段输出**：offline 模式下应看到编号 `[0]` 到 `[3]` 的四条消息。`[0]` 是用户问题；`[1]` 的 `ai` 文字为空，真正的内容在它下面“请求工具”那一行；`[2]` 的 `tool` 是 Python 函数实际返回的 `It's always sunny in 北京!`，它回应的调用 ID 与请求一致；`[3]` 的 `ai` 才是上一格打印出来的最终回复。
 
@@ -188,7 +188,7 @@ check_weather(result["messages"])
 ```
 
     已验证 get_weather 的请求、调用关联、成功状态与返回值： It's always sunny in 北京!
-    
+
 
 ## 2. 编写自定义工具：三要素变成了什么？
 
@@ -234,7 +234,7 @@ print("直接调用函数：", calculate("1 + 2 * 3"), convert_currency(100, "US
 ```
 
     直接调用函数： 7 {'amount': 720.0, 'currency': 'CNY'}
-    
+
 
 ### 2.1 打印工具 Schema
 
@@ -272,7 +272,7 @@ print("\n已验证：类型标注、docstring 与默认值都进入了工具 Sch
       - to_currency: string，默认值 'CNY'；The target currency code, defaults to "CNY".
     
     已验证：类型标注、docstring 与默认值都进入了工具 Schema。
-    
+
 
 对照输出看三要素：
 
@@ -330,12 +330,14 @@ for message in calc_result["messages"]:
         print("  返回", message.name, message.status, message.content, "ID:", message.tool_call_id)
 ```
 
-    请求 convert_currency {'amount': 100, 'from_currency': 'USD'} ID: ch02-convert
+    请求
+
+     convert_currency {'amount': 100, 'from_currency': 'USD'} ID: ch02-convert
       返回 convert_currency success {"amount": 720.0, "currency": "CNY"} ID: ch02-convert
     请求 calculate {'expression': '720.0 * 1.08'} ID: ch02-calculate
       返回 calculate success 777.6 ID: ch02-calculate
     最终回复： （脚本预设回复）换算与计算已完成，结果见工具返回。
-    
+
 
 **怎样读这段输出**：应看到两对“请求 → 返回”。`convert_currency` 的请求里没有 `to_currency`，函数用了默认值 `CNY`；它返回的字典被框架转成 JSON 文本 `{"amount": 720.0, "currency": "CNY"}` 放进 ToolMessage。`calculate` 返回 `777.6`。
 
@@ -391,7 +393,7 @@ check_calculator(calc_result["messages"])
 ```
 
     已验证：100 USD → 720.0 CNY，× 1.08 = 777.6
-    
+
 
 ## 4. 工具出错时会发生什么？
 
@@ -437,9 +439,11 @@ else:
     内容： Error invoking tool 'convert_currency' with kwargs {'amount': 'a lot', 'from_currency': 'USD'} with error:
      amount: Input should be a valid number, unable to parse string as a number
      Please fix the error and try again.
+
+
     
     函数内部异常中断了 invoke()：KeyError 'JPY'
-    
+
 
 两种错误的区别很重要：
 
@@ -458,9 +462,9 @@ else:
 2. 脚本里第二次调用写死的是 `720.0 * 1.08`，`calculate` 会返回多少？
 3. `check_calculator` 会通过吗？如果失败，停在哪一步？
 
-**再运行**：选择“重启内核并运行全部”，核对第 3 节的输出：换算返回 `{"amount": 700.0, "currency": "CNY"}`，`calculate` 仍然返回 `777.6`；`check_calculator` 停在“calculate 没有算出 700.0 × 1.08 = 756”。第 1、2 节和第 4 节不受影响。
+**再运行**：选择“重启内核并运行全部”，核对第 3 节的输出：换算返回 `{"amount": 700.0, "currency": "CNY"}`，`calculate` 仍然返回 `777.6`；`check_calculator` 停在“calculate 的算式没有用到换算结果 700.0。”。第 1、2 节和第 4 节不受影响。
 
-**这说明**：脚本模型只是回放预先写好的消息，不会读取工具结果，所以第二步用的仍是旧数字。检查用实际换算结果重算，发现两步没有衔接上。每一步都“成功”，也不等于任务完成。live 模式下，这一步由真实模型读取 `700.0` 再写算式，检查的正是它有没有做到。
+**这说明**：脚本模型只是回放预先写好的消息，不会读取工具结果，所以第二步用的仍是旧数字。检查先看算式里有没有实际换算结果 `700.0`：`720.0 * 1.08` 里没有，两步没有衔接上，检查就停在这里，还轮不到核对 `700.0 × 1.08 = 756`。每一步都“成功”，也不等于任务完成。live 模式下，这一步由真实模型读取 `700.0` 再写算式，检查的正是它有没有做到。
 
 **恢复**：把汇率改回 `7.2`，重启内核并运行全部，确认所有检查重新通过。
 
